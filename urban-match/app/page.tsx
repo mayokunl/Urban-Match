@@ -1,10 +1,69 @@
 "use client";
 import { useState } from "react";
+import { auth } from "@/lib/firebase";
+import {
+  createUserWithEmailAndPassword,
+  signInWithEmailAndPassword,
+  updateProfile,
+} from "firebase/auth";
 
 export default function Home() {
   const [isAuthOpen, setIsAuthOpen] = useState(false);
   const [authMode, setAuthMode] = useState<"signup" | "login">("signup");
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
+
+  // Firebase auth form state
+  const [fullName, setFullName] = useState("");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+
+  const [authLoading, setAuthLoading] = useState(false);
+  const [authError, setAuthError] = useState<string | null>(null);
+
+  function resetAuthFields() {
+    setFullName("");
+    setEmail("");
+    setPassword("");
+    setAuthError(null);
+    setAuthLoading(false);
+  }
+
+  function openAuth(mode: "signup" | "login") {
+    setAuthMode(mode);
+    setIsAuthOpen(true);
+    resetAuthFields();
+  }
+
+  function closeAuth() {
+    setIsAuthOpen(false);
+    resetAuthFields();
+  }
+
+  async function handleAuthSubmit(e: React.FormEvent<HTMLFormElement>) {
+    e.preventDefault();
+    setAuthError(null);
+    setAuthLoading(true);
+
+    try {
+      if (authMode === "signup") {
+        const userCred = await createUserWithEmailAndPassword(auth, email, password);
+
+        // Save display name (optional)
+        const name = fullName.trim();
+        if (name) {
+          await updateProfile(userCred.user, { displayName: name });
+        }
+      } else {
+        await signInWithEmailAndPassword(auth, email, password);
+      }
+
+      closeAuth();
+    } catch (err: any) {
+      // Firebase errors are already pretty clear
+      setAuthError(err?.message ?? "Authentication failed.");
+      setAuthLoading(false);
+    }
+  }
 
   return (
     <main className="page">
@@ -36,6 +95,7 @@ export default function Home() {
           </button>
         </div>
       </header>
+
       {isMobileMenuOpen && (
         <div className="mobileMenuBackdrop" onClick={() => setIsMobileMenuOpen(false)}>
           <nav className="mobileMenu" onClick={(event) => event.stopPropagation()}>
@@ -48,16 +108,27 @@ export default function Home() {
             <a href="#about" onClick={() => setIsMobileMenuOpen(false)}>
               Why STL
             </a>
+
             <button
               className="btn btnPrimary mobileStart"
               type="button"
               onClick={() => {
-                setAuthMode("signup");
-                setIsAuthOpen(true);
+                openAuth("signup");
                 setIsMobileMenuOpen(false);
               }}
             >
               Get started
+            </button>
+
+            <button
+              className="btn btnGhost mobileStart"
+              type="button"
+              onClick={() => {
+                openAuth("login");
+                setIsMobileMenuOpen(false);
+              }}
+            >
+              Log in
             </button>
           </nav>
         </div>
@@ -88,16 +159,11 @@ export default function Home() {
           </p>
 
           <div className="ctaRow" id="get-started">
-            <button
-              className="btn btnPrimary"
-              type="button"
-              onClick={() => {
-                setAuthMode("signup");
-                setIsAuthOpen(true);
-              }}
-            >
+            <button className="btn btnPrimary" type="button" onClick={() => openAuth("signup")}>
               Get started
             </button>
+
+
             <a className="btn btnGhost" href="#features">
               See features
             </a>
@@ -169,7 +235,7 @@ export default function Home() {
       </section>
 
       {isAuthOpen && (
-        <div className="authModalBackdrop" onClick={() => setIsAuthOpen(false)}>
+        <div className="authModalBackdrop" onClick={closeAuth}>
           <section
             className="authModal"
             role="dialog"
@@ -179,7 +245,7 @@ export default function Home() {
           >
             <div className="authHeader">
               <h3>{authMode === "signup" ? "Create your account" : "Log in to Urban Match"}</h3>
-              <button className="authClose" type="button" onClick={() => setIsAuthOpen(false)}>
+              <button className="authClose" type="button" onClick={closeAuth}>
                 Close
               </button>
             </div>
@@ -188,36 +254,69 @@ export default function Home() {
               <button
                 className={authMode === "signup" ? "authTab active" : "authTab"}
                 type="button"
-                onClick={() => setAuthMode("signup")}
+                onClick={() => {
+                  setAuthMode("signup");
+                  setAuthError(null);
+                }}
               >
                 Sign up
               </button>
               <button
                 className={authMode === "login" ? "authTab active" : "authTab"}
                 type="button"
-                onClick={() => setAuthMode("login")}
+                onClick={() => {
+                  setAuthMode("login");
+                  setAuthError(null);
+                }}
               >
                 Log in
               </button>
             </div>
 
-            <form className="authForm" onSubmit={(event) => event.preventDefault()}>
+            <form className="authForm" onSubmit={handleAuthSubmit}>
               {authMode === "signup" && (
                 <label className="field">
                   Full name
-                  <input type="text" placeholder="Your full name" required />
+                  <input
+                    type="text"
+                    placeholder="Your full name"
+                    value={fullName}
+                    onChange={(e) => setFullName(e.target.value)}
+                    required
+                    disabled={authLoading}
+                  />
                 </label>
               )}
+
               <label className="field">
                 Email
-                <input type="email" placeholder="you@email.com" required />
+                <input
+                  type="email"
+                  placeholder="you@email.com"
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  required
+                  disabled={authLoading}
+                />
               </label>
+
               <label className="field">
                 Password
-                <input type="password" placeholder="Enter password" required />
+                <input
+                  type="password"
+                  placeholder="Enter password"
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  required
+                  minLength={6}
+                  disabled={authLoading}
+                />
               </label>
-              <button className="btn btnPrimary authSubmit" type="submit">
-                {authMode === "signup" ? "Sign up" : "Log in"}
+
+              {authError && <div className="authError">{authError}</div>}
+
+              <button className="btn btnPrimary authSubmit" type="submit" disabled={authLoading}>
+                {authLoading ? "Please wait..." : authMode === "signup" ? "Sign up" : "Log in"}
               </button>
             </form>
           </section>
@@ -228,7 +327,7 @@ export default function Home() {
         :global(html, body) {
           padding: 0;
           margin: 0;
-          background: #000; /* black background */
+          background: #000; /* keep your current theme */
           color: #fff;
           font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica,
             Arial, "Apple Color Emoji", "Segoe UI Emoji";
@@ -396,9 +495,9 @@ export default function Home() {
           min-height: 540px;
           display: flex;
           flex-direction: column;
-          align-items: center; /* center horizontally */
-          justify-content: center; /* center vertically */
-          text-align: center; /* center text */
+          align-items: center;
+          justify-content: center;
+          text-align: center;
           padding: 0 20px;
           max-width: 900px;
           margin: 0 auto;
@@ -464,7 +563,7 @@ export default function Home() {
           color: #fff;
         }
 
-        /* Below hero (black theme, but readable) */
+        /* Below hero */
         .content {
           background: #000;
         }
@@ -574,6 +673,7 @@ export default function Home() {
           color: rgba(255, 255, 255, 0.85);
         }
 
+        /* Auth modal */
         .authModalBackdrop {
           position: fixed;
           inset: 0;
@@ -667,9 +767,24 @@ export default function Home() {
           box-shadow: 0 0 0 3px rgba(96, 165, 250, 0.16);
         }
 
+        .authError {
+          padding: 10px 12px;
+          border-radius: 12px;
+          background: rgba(220, 38, 38, 0.12);
+          border: 1px solid rgba(220, 38, 38, 0.22);
+          color: rgba(255, 255, 255, 0.92);
+          font-size: 13px;
+          line-height: 1.4;
+        }
+
         .authSubmit {
           width: 100%;
           margin-top: 8px;
+        }
+
+        .authSubmit:disabled {
+          opacity: 0.7;
+          cursor: not-allowed;
         }
 
         @media (max-width: 900px) {
