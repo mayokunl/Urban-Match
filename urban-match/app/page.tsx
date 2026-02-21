@@ -1,16 +1,55 @@
 "use client";
-import { useState } from "react";
-import { auth } from "@/lib/firebase";
+import { useEffect, useState } from "react";
+import { auth, db } from "@/lib/firebase";
 import {
   createUserWithEmailAndPassword,
+  onAuthStateChanged,
   signInWithEmailAndPassword,
+  signOut,
   updateProfile,
+  type User,
 } from "firebase/auth";
+import { doc, getDoc } from "firebase/firestore";
+
+type UserProfile = {
+  fullName: string;
+  expectedSalary: string;
+  interests: string[];
+  familySize: string;
+  monthlyDebt: string;
+  housingBudget: string;
+  rentOrOwn: "rent" | "own";
+};
+
+const DEFAULT_PROFILE: UserProfile = {
+  fullName: "",
+  expectedSalary: "",
+  interests: [],
+  familySize: "",
+  monthlyDebt: "",
+  housingBudget: "",
+  rentOrOwn: "rent",
+};
+
+function getErrorMessage(error: unknown, fallback: string) {
+  if (error instanceof Error && error.message) {
+    return error.message;
+  }
+
+  return fallback;
+}
 
 export default function Home() {
   const [isAuthOpen, setIsAuthOpen] = useState(false);
+  const [isProfileOpen, setIsProfileOpen] = useState(false);
   const [authMode, setAuthMode] = useState<"signup" | "login">("signup");
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
+  const [currentUser, setCurrentUser] = useState<User | null>(null);
+  const [userProfile, setUserProfile] = useState<UserProfile>(DEFAULT_PROFILE);
+  const [profileLoading, setProfileLoading] = useState(false);
+  const [profileError, setProfileError] = useState<string | null>(null);
+  const [profileSaved, setProfileSaved] = useState(false);
+  const [interestInput, setInterestInput] = useState("");
 
   // Firebase auth form state
   const [fullName, setFullName] = useState("");
@@ -19,6 +58,51 @@ export default function Home() {
 
   const [authLoading, setAuthLoading] = useState(false);
   const [authError, setAuthError] = useState<string | null>(null);
+
+  useEffect(() => {
+    const unsubscribe = onAuthStateChanged(auth, async (user) => {
+      setCurrentUser(user);
+      setProfileSaved(false);
+      setProfileError(null);
+
+      if (!user) {
+        setUserProfile(DEFAULT_PROFILE);
+        setIsProfileOpen(false);
+        return;
+      }
+
+      const docRef = doc(db, "profiles", user.uid);
+      const docSnap = await getDoc(docRef);
+
+      if (docSnap.exists()) {
+        const data = docSnap.data();
+        const savedInterests = Array.isArray(data.interests)
+          ? data.interests
+          : String(data.interests ?? data.lifestyle ?? "")
+              .split(",")
+              .map((item) => item.trim())
+              .filter(Boolean);
+
+        setUserProfile({
+          fullName: String(data.fullName ?? user.displayName ?? ""),
+          expectedSalary: String(data.expectedSalary ?? data.salary ?? ""),
+          interests: savedInterests,
+          familySize: String(data.familySize ?? ""),
+          monthlyDebt: String(data.monthlyDebt ?? ""),
+          housingBudget: String(data.housingBudget ?? ""),
+          rentOrOwn: data.rentOrOwn === "own" ? "own" : "rent",
+        });
+      } else {
+        setUserProfile({
+          ...DEFAULT_PROFILE,
+          fullName: user.displayName ?? "",
+        });
+        setIsProfileOpen(true);
+      }
+    });
+
+    return () => unsubscribe();
+  }, []);
 
   function resetAuthFields() {
     setFullName("");
@@ -39,6 +123,32 @@ export default function Home() {
     resetAuthFields();
   }
 
+  function resetProfileSavedState() {
+    setProfileSaved(false);
+    setProfileError(null);
+  }
+
+  function handleAddInterest() {
+    const nextInterest = interestInput.trim();
+    if (!nextInterest) return;
+
+    setUserProfile((prev) => {
+      if (prev.interests.some((interest) => interest.toLowerCase() === nextInterest.toLowerCase())) {
+        return prev;
+      }
+
+      return { ...prev, interests: [...prev.interests, nextInterest] };
+    });
+    setInterestInput("");
+  }
+
+  function removeInterest(interestToRemove: string) {
+    setUserProfile((prev) => ({
+      ...prev,
+      interests: prev.interests.filter((interest) => interest !== interestToRemove),
+    }));
+  }
+
   async function handleAuthSubmit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
     setAuthError(null);
@@ -53,17 +163,91 @@ export default function Home() {
         if (name) {
           await updateProfile(userCred.user, { displayName: name });
         }
+
+        setUserProfile((prev) => ({
+          ...prev,
+          fullName: name || prev.fullName,
+        }));
+        setIsProfileOpen(true);
       } else {
         await signInWithEmailAndPassword(auth, email, password);
       }
 
       closeAuth();
-    } catch (err: any) {
+    } catch (err: unknown) {
       // Firebase errors are already pretty clear
-      setAuthError(err?.message ?? "Authentication failed.");
+      setAuthError(getErrorMessage(err, "Authentication failed."));
       setAuthLoading(false);
     }
   }
+
+async function handleSaveProfile(e: React.FormEvent<HTMLFormElement>) {
+  e.preventDefault();
+  resetProfileSavedState();
+
+  if (!currentUser) {
+    setProfileError("Please log in before saving your profile.");
+    return;
+  }
+  if (userProfile.interests.length === 0) {
+    setProfileError("Add at least one interest before saving your profile.");
+    return;
+  }
+
+  setProfileLoading(true);
+  setProfileError(null);
+
+  try {
+    // Convert to integers (whole numbers)
+    const expectedSalary = parseInt(userProfile.expectedSalary, 10);
+    const familySize = parseInt(userProfile.familySize, 10);
+    const monthlyDebt = parseInt(userProfile.monthlyDebt, 10);
+    const housingBudget = parseInt(userProfile.housingBudget, 10);
+
+    // Validate integer conversions
+    if (Number.isNaN(expectedSalary) || expectedSalary < 0) {
+      setProfileError("Expected salary must be a valid number.");
+      return;
+    }
+    if (Number.isNaN(familySize) || familySize < 1) {
+      setProfileError("Family size must be 1 or more.");
+      return;
+    }
+    if (Number.isNaN(monthlyDebt) || monthlyDebt < 0) {
+      setProfileError("Monthly debt must be a valid number.");
+      return;
+    }
+    if (Number.isNaN(housingBudget) || housingBudget < 0) {
+      setProfileError("Housing budget must be a valid number.");
+      return;
+    }
+
+    const payload = {
+      uid: currentUser.uid,
+      email: currentUser.email ?? "",
+      fullName: userProfile.fullName.trim(),
+      interests: userProfile.interests,
+
+      // integers ✅
+      expectedSalary,
+      familySize,
+      monthlyDebt,
+      housingBudget,
+      rentOrOwn: userProfile.rentOrOwn,
+
+      savedAt: new Date().toISOString(),
+    };
+
+    // ✅ This is all your backend team needs
+    console.log("%cURBAN MATCH PROFILE ✅", "color:#22c55e;font-weight:900", payload);
+
+    // Optional: mark as saved + close modal
+    setProfileSaved(true);
+    setIsProfileOpen(false);
+  } finally {
+    setProfileLoading(false);
+  }
+}
 
   return (
     <main className="page">
@@ -82,6 +266,34 @@ export default function Home() {
           </nav>
         </div>
         <div className="navRight">
+          {currentUser ? (
+            <div className="desktopActions">
+              <span className="userPill">Hi, {currentUser.displayName ?? "Planner"}</span>
+              <button
+                className="btn btnGhost"
+                type="button"
+                onClick={() => {
+                  resetProfileSavedState();
+                  setIsProfileOpen(true);
+                }}
+              >
+                Edit profile
+              </button>
+              <button className="btn btnGhost" type="button" onClick={() => signOut(auth)}>
+                Log out
+              </button>
+            </div>
+          ) : (
+            <div className="desktopActions">
+              <button className="btn btnGhost" type="button" onClick={() => openAuth("login")}>
+                Log in
+              </button>
+              <button className="btn btnPrimary" type="button" onClick={() => openAuth("signup")}>
+                Get started
+              </button>
+            </div>
+          )}
+
           <button
             className={isMobileMenuOpen ? "menuButton open" : "menuButton"}
             type="button"
@@ -109,27 +321,55 @@ export default function Home() {
               Why STL
             </a>
 
-            <button
-              className="btn btnPrimary mobileStart"
-              type="button"
-              onClick={() => {
-                openAuth("signup");
-                setIsMobileMenuOpen(false);
-              }}
-            >
-              Get started
-            </button>
+            {currentUser ? (
+              <>
+                <button
+                  className="btn btnPrimary mobileStart"
+                  type="button"
+                  onClick={() => {
+                    resetProfileSavedState();
+                    setIsProfileOpen(true);
+                    setIsMobileMenuOpen(false);
+                  }}
+                >
+                  Edit profile
+                </button>
+                <button
+                  className="btn btnGhost mobileStart"
+                  type="button"
+                  onClick={async () => {
+                    await signOut(auth);
+                    setIsMobileMenuOpen(false);
+                  }}
+                >
+                  Log out
+                </button>
+              </>
+            ) : (
+              <>
+                <button
+                  className="btn btnPrimary mobileStart"
+                  type="button"
+                  onClick={() => {
+                    openAuth("signup");
+                    setIsMobileMenuOpen(false);
+                  }}
+                >
+                  Get started
+                </button>
 
-            <button
-              className="btn btnGhost mobileStart"
-              type="button"
-              onClick={() => {
-                openAuth("login");
-                setIsMobileMenuOpen(false);
-              }}
-            >
-              Log in
-            </button>
+                <button
+                  className="btn btnGhost mobileStart"
+                  type="button"
+                  onClick={() => {
+                    openAuth("login");
+                    setIsMobileMenuOpen(false);
+                  }}
+                >
+                  Log in
+                </button>
+              </>
+            )}
           </nav>
         </div>
       )}
@@ -159,9 +399,22 @@ export default function Home() {
           </p>
 
           <div className="ctaRow" id="get-started">
-            <button className="btn btnPrimary" type="button" onClick={() => openAuth("signup")}>
-              Get started
-            </button>
+            {currentUser ? (
+              <button
+                className="btn btnPrimary"
+                type="button"
+                onClick={() => {
+                  resetProfileSavedState();
+                  setIsProfileOpen(true);
+                }}
+              >
+                Complete your profile
+              </button>
+            ) : (
+              <button className="btn btnPrimary" type="button" onClick={() => openAuth("signup")}>
+                Get started
+              </button>
+            )}
 
 
             <a className="btn btnGhost" href="#features">
@@ -173,6 +426,35 @@ export default function Home() {
 
       {/* Below hero content */}
       <section className="content">
+        {currentUser && (
+          <section className="section">
+            <div className="sectionInner">
+              <div className="profileBanner">
+                <div>
+                  <div className="profileBannerTitle">Your Urban Match profile</div>
+                  <p>
+                    Expected salary: {userProfile.expectedSalary || "Not set"} | Housing budget:{" "}
+                    {userProfile.housingBudget || "Not set"} | Housing choice:{" "}
+                    {userProfile.rentOrOwn === "own" ? "Own" : "Rent"} | Interests:{" "}
+                    {userProfile.interests.length > 0 ? userProfile.interests.join(", ") : "Not set"}
+                  </p>
+                </div>
+                <button
+                  className="btn btnPrimary"
+                  type="button"
+                  onClick={() => {
+                    resetProfileSavedState();
+                    setIsProfileOpen(true);
+                  }}
+                >
+                  Update profile
+                </button>
+              </div>
+              {profileSaved && <div className="profileSuccess">Profile saved successfully.</div>}
+            </div>
+          </section>
+        )}
+
         <section className="section" id="features">
           <div className="sectionInner">
             <h2 className="h2">Features</h2>
@@ -201,7 +483,7 @@ export default function Home() {
                 <div className="stepNum">1</div>
                 <div>
                   <div className="stepTitle">Tell us what you want</div>
-                  <div className="stepText">Your budget, interests, and preferred areas.</div>
+                  <div className="stepText">Your budget, interests, and priorities.</div>
                 </div>
               </div>
 
@@ -323,6 +605,178 @@ export default function Home() {
         </div>
       )}
 
+      {isProfileOpen && (
+        <div className="authModalBackdrop" onClick={() => setIsProfileOpen(false)}>
+          <section
+            className="authModal"
+            role="dialog"
+            aria-modal="true"
+            aria-label="Profile setup"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="authHeader">
+              <h3>Set up your STL plan profile</h3>
+              <button className="authClose" type="button" onClick={() => setIsProfileOpen(false)}>
+                Close
+              </button>
+            </div>
+
+            <form className="authForm" onSubmit={handleSaveProfile}>
+              <label className="field">
+                Full name
+                <input
+                  type="text"
+                  placeholder="Your full name"
+                  value={userProfile.fullName}
+                  onChange={(e) =>
+                    setUserProfile((prev) => ({ ...prev, fullName: e.target.value }))
+                  }
+                  required
+                  disabled={profileLoading}
+                />
+              </label>
+
+              <label className="field">
+                Expected salary (yearly)
+                <input
+                  type="number"
+                  min={0}
+                  placeholder="e.g. 65000"
+                  value={userProfile.expectedSalary}
+                  onChange={(e) =>
+                    setUserProfile((prev) => ({ ...prev, expectedSalary: e.target.value }))
+                  }
+                  required
+                  disabled={profileLoading}
+                />
+              </label>
+
+              <div className="field">
+                Interests (nightlife, food, dinner, etc.)
+                <div className="interestComposer">
+                  <input
+                    type="text"
+                    placeholder="e.g. live music"
+                    value={interestInput}
+                    onChange={(e) => setInterestInput(e.target.value)}
+                    disabled={profileLoading}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") {
+                        e.preventDefault();
+                        handleAddInterest();
+                      }
+                    }}
+                  />
+                  <button
+                    className="btn btnGhost interestAddButton"
+                    type="button"
+                    onClick={handleAddInterest}
+                    disabled={profileLoading}
+                  >
+                    Add
+                  </button>
+                </div>
+                {userProfile.interests.length > 0 && (
+                  <div className="interestList">
+                    {userProfile.interests.map((interest) => (
+                      <button
+                        key={interest}
+                        className="interestChip"
+                        type="button"
+                        onClick={() => removeInterest(interest)}
+                        title="Remove interest"
+                        disabled={profileLoading}
+                      >
+                        {interest} x
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              <label className="field">
+                Family size
+                <input
+                  type="number"
+                  min={1}
+                  placeholder="e.g. 3"
+                  value={userProfile.familySize}
+                  onChange={(e) =>
+                    setUserProfile((prev) => ({ ...prev, familySize: e.target.value }))
+                  }
+                  required
+                  disabled={profileLoading}
+                />
+              </label>
+
+              <label className="field">
+                Monthly debt payments
+                <input
+                  type="number"
+                  min={0}
+                  placeholder="e.g. 450"
+                  value={userProfile.monthlyDebt}
+                  onChange={(e) =>
+                    setUserProfile((prev) => ({ ...prev, monthlyDebt: e.target.value }))
+                  }
+                  required
+                  disabled={profileLoading}
+                />
+              </label>
+
+              <label className="field">
+                Housing budget (monthly)
+                <input
+                  type="number"
+                  min={0}
+                  placeholder="e.g. 1400"
+                  value={userProfile.housingBudget}
+                  onChange={(e) =>
+                    setUserProfile((prev) => ({ ...prev, housingBudget: e.target.value }))
+                  }
+                  required
+                  disabled={profileLoading}
+                />
+              </label>
+
+              <div className="field">
+                Rent or own
+                <div className="choiceRow">
+                  <label className="choiceOption">
+                    <input
+                      type="radio"
+                      name="rentOrOwn"
+                      value="rent"
+                      checked={userProfile.rentOrOwn === "rent"}
+                      onChange={() => setUserProfile((prev) => ({ ...prev, rentOrOwn: "rent" }))}
+                      disabled={profileLoading}
+                    />
+                    Rent
+                  </label>
+                  <label className="choiceOption">
+                    <input
+                      type="radio"
+                      name="rentOrOwn"
+                      value="own"
+                      checked={userProfile.rentOrOwn === "own"}
+                      onChange={() => setUserProfile((prev) => ({ ...prev, rentOrOwn: "own" }))}
+                      disabled={profileLoading}
+                    />
+                    Own
+                  </label>
+                </div>
+              </div>
+
+              {profileError && <div className="authError">{profileError}</div>}
+
+              <button className="btn btnPrimary authSubmit" type="submit" disabled={profileLoading}>
+                {profileLoading ? "Saving..." : "Save profile"}
+              </button>
+            </form>
+          </section>
+        </div>
+      )}
+
       <style jsx>{`
         :global(html, body) {
           padding: 0;
@@ -379,6 +833,22 @@ export default function Home() {
           display: flex;
           align-items: center;
           justify-content: flex-end;
+          gap: 10px;
+        }
+
+        .desktopActions {
+          display: flex;
+          align-items: center;
+          gap: 10px;
+        }
+
+        .userPill {
+          font-size: 13px;
+          color: rgba(255, 255, 255, 0.86);
+          padding: 8px 12px;
+          border-radius: 999px;
+          border: 1px solid rgba(255, 255, 255, 0.18);
+          background: rgba(255, 255, 255, 0.05);
         }
 
         .logoBox {
@@ -583,6 +1053,38 @@ export default function Home() {
           letter-spacing: -0.3px;
         }
 
+        .profileBanner {
+          border-radius: 14px;
+          padding: 16px;
+          display: flex;
+          justify-content: space-between;
+          align-items: center;
+          gap: 12px;
+          background: rgba(29, 78, 216, 0.2);
+          border: 1px solid rgba(96, 165, 250, 0.35);
+        }
+
+        .profileBannerTitle {
+          font-weight: 700;
+          margin-bottom: 6px;
+        }
+
+        .profileBanner p {
+          margin: 0;
+          color: rgba(255, 255, 255, 0.86);
+          line-height: 1.5;
+          font-size: 14px;
+        }
+
+        .profileSuccess {
+          margin-top: 10px;
+          padding: 10px 12px;
+          border-radius: 12px;
+          background: rgba(34, 197, 94, 0.2);
+          border: 1px solid rgba(74, 222, 128, 0.35);
+          font-size: 13px;
+        }
+
         .grid {
           display: grid;
           grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -767,6 +1269,50 @@ export default function Home() {
           box-shadow: 0 0 0 3px rgba(96, 165, 250, 0.16);
         }
 
+        .choiceRow {
+          display: flex;
+          gap: 12px;
+          flex-wrap: wrap;
+        }
+
+        .choiceOption {
+          display: inline-flex;
+          align-items: center;
+          gap: 6px;
+          padding: 8px 10px;
+          border-radius: 10px;
+          border: 1px solid rgba(255, 255, 255, 0.16);
+          background: rgba(255, 255, 255, 0.04);
+        }
+
+        .interestComposer {
+          display: grid;
+          grid-template-columns: 1fr auto;
+          gap: 8px;
+        }
+
+        .interestAddButton {
+          border-radius: 10px;
+          min-width: 74px;
+        }
+
+        .interestList {
+          display: flex;
+          flex-wrap: wrap;
+          gap: 8px;
+          margin-top: 8px;
+        }
+
+        .interestChip {
+          border-radius: 999px;
+          border: 1px solid rgba(96, 165, 250, 0.45);
+          background: rgba(29, 78, 216, 0.2);
+          color: #fff;
+          padding: 6px 10px;
+          font-size: 12px;
+          cursor: pointer;
+        }
+
         .authError {
           padding: 10px 12px;
           border-radius: 12px;
@@ -863,6 +1409,10 @@ export default function Home() {
             display: none;
           }
 
+          .desktopActions {
+            display: none;
+          }
+
           .menuButton {
             display: inline-flex;
           }
@@ -904,6 +1454,11 @@ export default function Home() {
           .mobileStart {
             width: 100%;
             margin-top: 2px;
+          }
+
+          .profileBanner {
+            flex-direction: column;
+            align-items: stretch;
           }
 
           .videoHero {
