@@ -1,56 +1,148 @@
 import os
+import math
 import requests
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException
-from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
+from flask import Flask, request, jsonify
+from flask_cors import CORS
 
+# ----------------------------
+# Setup
+# ----------------------------
 load_dotenv()
 API_KEY = os.getenv("GOOGLE_MAPS_API_KEY")
-
 if not API_KEY:
     raise ValueError("Missing GOOGLE_MAPS_API_KEY")
 
 GEOCODE_URL = "https://maps.googleapis.com/maps/api/geocode/json"
 PLACES_NEARBY_URL = "https://places.googleapis.com/v1/places:searchNearby"
 
+app = Flask(__name__)
+CORS(app)  # allow frontend calls during dev
+
+# ----------------------------
+# Preferences (NO daylife)
+# ----------------------------
 PREFERENCE_TYPES = {
     "nightlife": ["bar", "night_club"],
     "restaurants": ["restaurant"],
     "brunch": ["cafe", "bakery"],
-    "sports": ["stadium", "sports_bar"],
-    "daylife": ["tourist_attraction", "park", "museum"],
+    "sports": ["sports_bar", "stadium"],
+    "shopping": ["clothing_store", "shoe_store", "book_store", "jewelry_store"],
+    "parks_recreation": ["park", "tourist_attraction", "museum"],
 }
 
-FIELD_MASK = "places.displayName,places.formattedAddress,places.rating,places.primaryType,places.types,places.location"
+# Typos / friendly inputs
+PREFERENCE_ALIASES = {
+    # restaurants typos
+    "resturaunts": "restaurants",
+    "resturants": "restaurants",
+    "restaraunts": "restaurants",
+    "restaraunt": "restaurants",
+    "resturaunt": "restaurants",
+    "restaurant": "restaurants",
+    "food": "restaurants",
 
-app = FastAPI()
+    # nightlife variants
+    "bars": "nightlife",
+    "clubs": "nightlife",
+    "night clubs": "nightlife",
 
-# Allow your React app to call the API
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://localhost:3000"],  # Vite / CRA
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+    # parks & recreation variants
+    "park": "parks_recreation",
+    "parks": "parks_recreation",
+    "recreation": "parks_recreation",
+    "rec": "parks_recreation",
+    "parks and recreation": "parks_recreation",
+    "parks & recreation": "parks_recreation",
 
-class RecommendRequest(BaseModel):
-    location: str
-    preferences: list[str]
-    radius_m: float = 2000.0
-    max_results: int = 10
+    # shopping variants
+    "shop": "shopping",
+    "shops": "shopping",
+    "store": "shopping",
+    "stores": "shopping",
+}
 
+def normalize_pref(p: str) -> str:
+    p = (p or "").strip().lower()
+    return PREFERENCE_ALIASES.get(p, p)
+
+# ----------------------------
+# Hidden gem thresholds
+# ----------------------------
+MIN_RATING = 4.2
+
+REVIEW_BANDS = {
+    "restaurants": (25, 450),
+    "brunch": (25, 450),
+    "nightlife": (25, 700),
+    "sports": (25, 900),
+    "shopping": (15, 600),
+    "parks_recreation": (10, 1200),
+}
+
+CHAIN_KEYWORDS = {
+    # food chains
+    "starbucks", "chipotle", "mcdonald", "mcdonald’s", "panera", "subway",
+    "taco bell", "wendy", "burger king", "domino", "domino's", "pizza hut",
+    "dunkin", "dunkin'", "jimmy john", "jimmy john's", "kfc", "popeyes",
+    "five guys", "panda express", "chick-fil-a", "chick fil a", "ihop",
+    "applebee", "applebee's", "chili", "chili's", "outback", "olive garden",
+    "red lobster", "buffalo wild wings", "bww", "wingstop", "jersey mike",
+    "jersey mike's", "papa john", "papa john's", "little caesars", "qdoba",
+    "raising cane", "raising cane's", "shake shack", "sonic", "arby's", "arbys",
+    "jack in the box", "hardee", "hardee's", "white castle",
+
+    # retail chains
+    "walmart", "target", "costco", "sam's club", "best buy",
+    "home depot", "the home depot", "lowe", "lowe's",
+    "walgreens", "cvs", "tj maxx", "marshalls", "ross",
+    "old navy", "gap", "h&m", "zara", "forever 21",
+}
+
+NOT_HIDDEN_GEM_KEYWORDS = {
+    "ballpark village", "budweiser brew house"
+}
+
+def looks_like_chain(name: str) -> bool:
+    if not name:
+        return False
+    low = name.lower()
+    return any(k in low for k in CHAIN_KEYWORDS)
+
+def looks_too_obvious(name: str) -> bool:
+    if not name:
+        return False
+    low = name.lower()
+    return any(k in low for k in NOT_HIDDEN_GEM_KEYWORDS)
+
+# ----------------------------
+# Helpers
+# ----------------------------
 def get_lat_lng(location: str):
-    resp = requests.get(GEOCODE_URL, params={"address": location, "key": API_KEY}, timeout=20)
+    resp = requests.get(GEOCODE_URL, params={"address": location, "key": API_KEY})
     resp.raise_for_status()
     data = resp.json()
     if not data.get("results"):
-        raise HTTPException(status_code=400, detail="Location not found")
+        raise ValueError("Location not found")
     loc = data["results"][0]["geometry"]["location"]
     return loc["lat"], loc["lng"]
 
-def nearby_places(lat: float, lng: float, preference: str, radius_m: float, max_results: int):
+def generate_search_centers(lat, lng, step_m=1800):
+    dlat = step_m / 111_000
+    dlng = step_m / (111_000 * max(math.cos(math.radians(lat)), 0.2))
+    return [
+        (lat, lng),
+        (lat + dlat, lng),
+        (lat - dlat, lng),
+        (lat, lng + dlng),
+        (lat, lng - dlng),
+        (lat + dlat, lng + dlng),
+        (lat + dlat, lng - dlng),
+        (lat - dlat, lng + dlng),
+        (lat - dlat, lng - dlng),
+    ]
+
+def fetch_places_raw(lat, lng, preference, radius=1400):
     types = PREFERENCE_TYPES.get(preference)
     if not types:
         return []
@@ -58,56 +150,137 @@ def nearby_places(lat: float, lng: float, preference: str, radius_m: float, max_
     headers = {
         "Content-Type": "application/json",
         "X-Goog-Api-Key": API_KEY,
-        "X-Goog-FieldMask": FIELD_MASK,
+        "X-Goog-FieldMask": ",".join([
+            "places.displayName",
+            "places.formattedAddress",
+            "places.rating",
+            "places.userRatingCount",
+            "places.location",
+            "places.types",
+            "places.websiteUri",
+            "places.googleMapsUri",
+            "places.editorialSummary",
+        ])
     }
 
     body = {
         "includedTypes": types,
-        "maxResultCount": min(max_results, 20),
-        "rankPreference": "DISTANCE",
+        "maxResultCount": 20,
         "locationRestriction": {
             "circle": {
                 "center": {"latitude": lat, "longitude": lng},
-                "radius": float(radius_m),
+                "radius": radius
             }
-        },
+        }
     }
 
-    resp = requests.post(PLACES_NEARBY_URL, headers=headers, json=body, timeout=20)
-    if resp.status_code != 200:
-        # Bubble up Google’s error message
-        raise HTTPException(status_code=resp.status_code, detail=resp.text)
-
+    resp = requests.post(PLACES_NEARBY_URL, headers=headers, json=body)
+    resp.raise_for_status()
     data = resp.json()
+
     results = []
-    for p in data.get("places", []):
+    for place in data.get("places", []):
+        name = place.get("displayName", {}).get("text")
+        rating = place.get("rating")
+        count = place.get("userRatingCount")
+        loc = place.get("location") or {}
+
+        if loc.get("latitude") is None or loc.get("longitude") is None:
+            continue
+
         results.append({
-            "name": (p.get("displayName") or {}).get("text"),
-            "address": p.get("formattedAddress"),
-            "rating": p.get("rating"),
-            "primaryType": p.get("primaryType"),
-            "types": p.get("types", []),
-            "lat": (p.get("location") or {}).get("latitude"),
-            "lng": (p.get("location") or {}).get("longitude"),
+            "name": name,
+            "address": place.get("formattedAddress"),
+            "rating": rating,
+            "userRatingCount": count,
+            "lat": loc.get("latitude"),
+            "lng": loc.get("longitude"),
+            "websiteUri": place.get("websiteUri"),
+            "googleMapsUri": place.get("googleMapsUri"),
+            "summary": (place.get("editorialSummary") or {}).get("text"),
+            "types": place.get("types", []),
         })
+
     return results
 
+def is_hidden_gem(p: dict, preference: str) -> bool:
+    name = p.get("name") or ""
+    rating = p.get("rating")
+    count = p.get("userRatingCount")
+
+    if looks_like_chain(name) or looks_too_obvious(name):
+        return False
+    if rating is None or rating < MIN_RATING:
+        return False
+
+    min_c, max_c = REVIEW_BANDS.get(preference, (20, 1500))
+    if count is None or count < min_c or count > max_c:
+        return False
+
+    return True
+
+def dedupe_places(places):
+    seen = set()
+    out = []
+    for p in places:
+        key = p.get("googleMapsUri") or f"{p.get('name')}|{p.get('address')}"
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(p)
+    return out
+
+# ----------------------------
+# API Routes
+# ----------------------------
 @app.get("/health")
 def health():
-    return {"ok": True}
+    return jsonify({"ok": True})
 
-@app.get("/preferences")
-def preferences():
-    return {"preferences": list(PREFERENCE_TYPES.keys())}
+# Example:
+# /recommend?location=St%20Louis%2C%20MO&preferences=restaurants,shopping
+@app.get("/recommend")
+def recommend():
+    location = (request.args.get("location") or "").strip()
+    prefs_raw = (request.args.get("preferences") or "").strip()
 
-@app.post("/recommend")
-def recommend(req: RecommendRequest):
-    lat, lng = get_lat_lng(req.location)
+    if not location:
+        return jsonify({"error": "Missing location"}), 400
+    if not prefs_raw:
+        return jsonify({"error": "Missing preferences"}), 400
 
-    out = {"location": req.location, "lat": lat, "lng": lng, "results": {}}
+    prefs = [normalize_pref(p) for p in prefs_raw.split(",") if p.strip()]
+    # keep only supported preferences
+    prefs = [p for p in prefs if p in PREFERENCE_TYPES]
 
-    for pref in req.preferences:
-        pref = pref.strip().lower()
-        out["results"][pref] = nearby_places(lat, lng, pref, req.radius_m, req.max_results)
+    if not prefs:
+        return jsonify({"error": "No valid preferences provided"}), 400
 
-    return out
+    try:
+        base_lat, base_lng = get_lat_lng(location)
+    except ValueError:
+        return jsonify({"error": "Location not found"}), 404
+
+    centers = generate_search_centers(base_lat, base_lng, step_m=1800)
+
+    results_by_pref = {}
+    for pref in prefs:
+        all_places = []
+        for (c_lat, c_lng) in centers:
+            all_places.extend(fetch_places_raw(c_lat, c_lng, pref, radius=1400))
+
+        all_places = dedupe_places(all_places)
+        gems = [p for p in all_places if is_hidden_gem(p, pref)]
+
+        gems.sort(key=lambda p: (-(p["rating"] or 0), (p["userRatingCount"] or 999999)))
+        results_by_pref[pref] = gems[:10]
+
+    return jsonify({
+        "userLocation": {"text": location, "lat": base_lat, "lng": base_lng},
+        "preferences": prefs,
+        "results": results_by_pref
+    })
+
+if __name__ == "__main__":
+    # Run: python api.py
+    app.run(host="0.0.0.0", port=5000, debug=True)
