@@ -1,0 +1,8 @@
+spring:
+  config:
+    import: "optional:classpath:.env[.properties]"
+
+adzuna:
+  api_key: ${ADZUNA_API_KEY}
+  app_id: ${ADZUNA_APP_ID}
+  url: "https://api.adzuna.com/v1/api/jobs/us/search/1"
