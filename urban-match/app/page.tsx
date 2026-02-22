@@ -1135,6 +1135,10 @@ async function handleSaveProfile(e: React.FormEvent<HTMLFormElement>) {
           text-align: center;
         }
 
+        #how .h2 {
+          text-align: center;
+        }
+
         .profileBanner {
           border-radius: 14px;
           padding: 16px;
@@ -1218,6 +1222,7 @@ async function handleSaveProfile(e: React.FormEvent<HTMLFormElement>) {
           display: grid;
           gap: 10px;
           max-width: 760px;
+          margin: 0 auto;
         }
 
         .step {
