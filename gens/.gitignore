@@ -1,0 +1,22 @@
+# Environment variables (API keys, secrets)
+.env
+
+# Python cache files
+__pycache__/
+*.pyc
+env/
+
+# Virtual environment folders
+venv/
+env/
+
+# Node modules (for Next.js frontend)
+node_modules/
+
+# Build outputs
+.next/
+dist/
+
+# OS files
+.DS_Store
+Thumbs.db
