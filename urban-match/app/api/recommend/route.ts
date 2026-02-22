@@ -109,7 +109,7 @@ const DEFAULT_CITY = "St Louis, MO";
 const GENS_BASE =
   process.env.GENS_API_BASE_URL ??
   process.env.NEXT_PUBLIC_API_BASE_URL ??
-  "http://127.0.0.1:5000";
+  "";
 const MAS_BASE = process.env.MAS_API_BASE_URL ?? "http://127.0.0.1:8080";
 const JOBS_API_BASE_URL = process.env.JOBS_API_BASE_URL ?? MAS_BASE;
 const HOUSING_API_BASE_URL = process.env.HOUSING_API_BASE_URL ?? MAS_BASE;

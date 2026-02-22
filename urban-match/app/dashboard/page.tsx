@@ -205,8 +205,13 @@ export default function DashboardPage() {
   const [error, setError] = useState<string | null>(null);
   const [data, setData] = useState<AppRecommendResponse | null>(null);
   const [activeSection, setActiveSection] = useState<DashboardSection>("hidden_gems");
+  const [selectedJobId, setSelectedJobId] = useState<string | null>(null);
+  const [selectedHousingId, setSelectedHousingId] = useState<string | null>(null);
 
   const prefs = useMemo(() => mapInterestsToPrefs(profile?.interests ?? []), [profile?.interests]);
+  const selectedJob = data?.jobs.find((job) => job.id === selectedJobId) ?? null;
+  const selectedHousing = data?.housing.find((home) => home.id === selectedHousingId) ?? null;
+  const hiddenGemsUnlocked = Boolean(selectedJob && selectedHousing);
 
   useEffect(() => {
     // For now: just pull from localStorage (hackathon simple)
@@ -238,6 +243,9 @@ export default function DashboardPage() {
 
       const res = await fetchAppRecommendations(profile);
       setData(res);
+      setSelectedJobId(null);
+      setSelectedHousingId(null);
+      setActiveSection("jobs");
 
       console.log("✅ DASHBOARD backend results:", res);
     } catch (e: any) {
@@ -286,7 +294,8 @@ export default function DashboardPage() {
         <button
           type="button"
           className={activeSection === "hidden_gems" ? "sectionTab active" : "sectionTab"}
-          onClick={() => setActiveSection("hidden_gems")}
+          onClick={() => hiddenGemsUnlocked && setActiveSection("hidden_gems")}
+          disabled={Boolean(data) && !hiddenGemsUnlocked}
         >
           Hidden Gems
         </button>
@@ -306,6 +315,20 @@ export default function DashboardPage() {
         </button>
       </nav>
 
+      {data && (
+        <section className="flowBar" aria-label="Recommendation flow">
+          <div className={selectedJob ? "flowStep done" : "flowStep current"}>
+            1. Choose a job
+          </div>
+          <div className={selectedHousing ? "flowStep done" : selectedJob ? "flowStep current" : "flowStep"}>
+            2. Choose housing
+          </div>
+          <div className={hiddenGemsUnlocked ? "flowStep current" : "flowStep"}>
+            3. Explore hidden gems
+          </div>
+        </section>
+      )}
+
       <section className={activeSection === "hidden_gems" ? "wrap" : "wrap wrapSingle"}>
         {data?.lifeOverview && (
           <section className="panel overviewPanel">
@@ -320,6 +343,34 @@ export default function DashboardPage() {
                 ))}
               </div>
             )}
+          </section>
+        )}
+
+        {data && selectedJob && selectedHousing && (
+          <section className="panel overviewPanel finalPlanPanel">
+            <h2 className="h2">Your Final Plan</h2>
+            <p className="overviewText">
+              Start with <b>{selectedJob.title}</b> at {selectedJob.company}, and plan around living at{" "}
+              <b>{selectedHousing.title}</b> ({selectedHousing.addressText}). This gives you a clear path: secure a
+              strong job match first, lock in housing that fits your budget, then use Hidden Gems to build your
+              lifestyle around that choice.
+            </p>
+            <div className="finalPlanGrid">
+              <div className="stackCard">
+                <div className="stackTitle">Chosen job</div>
+                <div className="stackMeta">
+                  {selectedJob.title} | {selectedJob.company}
+                </div>
+                <div className="summary">{selectedJob.matchReason}</div>
+              </div>
+              <div className="stackCard">
+                <div className="stackTitle">Chosen housing</div>
+                <div className="stackMeta">
+                  {selectedHousing.title} | {selectedHousing.addressText}
+                </div>
+                <div className="summary">{selectedHousing.matchReason}</div>
+              </div>
+            </div>
           </section>
         )}
 
@@ -381,8 +432,20 @@ export default function DashboardPage() {
             </div>
           )}
 
-          {activeSection === "hidden_gems" && data && (
+          {activeSection === "hidden_gems" && data && !hiddenGemsUnlocked && (
+            <div className="empty">
+              Follow the story flow first: choose a job, then choose a housing option, and hidden gems will unlock.
+            </div>
+          )}
+
+          {activeSection === "hidden_gems" && data && hiddenGemsUnlocked && (
             <div className="sections">
+                  <div className="stackCard">
+                    <div className="stackTitle">Your selected path</div>
+                    <div className="stackMeta">
+                      Job: {selectedJob?.title ?? "Not selected"} | Housing: {selectedHousing?.title ?? "Not selected"}
+                    </div>
+                  </div>
                   {Object.entries(data.hiddenGems.results).map(([pref, places]) => (
                 <section key={pref} className="prefSection">
                   <div className="prefHeader">
@@ -451,7 +514,10 @@ export default function DashboardPage() {
               {data && data.jobs.length > 0 && (
                 <div className="cards" style={{ marginTop: 12 }}>
                   {data.jobs.map((job, idx) => (
-                    <article key={job.id ?? `${job.title ?? "job"}-${idx}`} className="card">
+                    <article
+                      key={job.id ?? `${job.title ?? "job"}-${idx}`}
+                      className={selectedJobId === job.id ? "card selectable selectedCard" : "card selectable"}
+                    >
                       <div className="cardTop">
                         <div className="name">{job.title || "Untitled role"}</div>
                         <div className="rating">
@@ -471,6 +537,16 @@ export default function DashboardPage() {
                         <div className="summary">{job.descriptionSnippet}</div>
                       )}
                       <div className="links">
+                        <button
+                          type="button"
+                          className={selectedJobId === job.id ? "linkButton selected" : "linkButton"}
+                          onClick={() => {
+                            setSelectedJobId(job.id);
+                            setActiveSection("housing");
+                          }}
+                        >
+                          {selectedJobId === job.id ? "Selected" : "Choose this job"}
+                        </button>
                         {job.applyUrl && (
                           <a className="link" href={job.applyUrl} target="_blank" rel="noreferrer">
                             Apply
@@ -505,7 +581,10 @@ export default function DashboardPage() {
                 <div className="cards" style={{ marginTop: 12 }}>
                   {data.housing.map((home, idx) => {
                     return (
-                      <article key={home.id ?? `home-${idx}`} className="card">
+                      <article
+                        key={home.id ?? `home-${idx}`}
+                        className={selectedHousingId === home.id ? "card selectable selectedCard" : "card selectable"}
+                      >
                         <div className="cardTop">
                           <div className="name">{home.title || "Rental Listing"}</div>
                           <div className="rating">
@@ -519,6 +598,16 @@ export default function DashboardPage() {
                         <div className="addr">{home.addressText || "Address unavailable"}</div>
                         <div className="summary">{home.matchReason} (score: {home.matchScore})</div>
                         <div className="links">
+                          <button
+                            type="button"
+                            className={selectedHousingId === home.id ? "linkButton selected" : "linkButton"}
+                            onClick={() => {
+                              setSelectedHousingId(home.id);
+                              setActiveSection("hidden_gems");
+                            }}
+                          >
+                            {selectedHousingId === home.id ? "Selected" : "Choose this home"}
+                          </button>
                           {home.listingUrl && (
                             <a className="link" href={home.listingUrl} target="_blank" rel="noreferrer">
                               View listing
@@ -685,6 +774,37 @@ export default function DashboardPage() {
           background: linear-gradient(180deg, rgba(0, 0, 0, 0.95), rgba(0, 0, 0, 0.65), rgba(0, 0, 0, 0));
         }
 
+        .flowBar {
+          max-width: 1120px;
+          margin: 8px auto 0;
+          padding: 0 16px;
+          display: grid;
+          grid-template-columns: repeat(3, minmax(0, 1fr));
+          gap: 8px;
+        }
+
+        .flowStep {
+          border-radius: 12px;
+          border: 1px solid rgba(255, 255, 255, 0.1);
+          background: rgba(255, 255, 255, 0.03);
+          padding: 10px 12px;
+          color: rgba(255, 255, 255, 0.68);
+          font-size: 13px;
+          font-weight: 700;
+        }
+
+        .flowStep.current {
+          border-color: rgba(96, 165, 250, 0.34);
+          background: rgba(29, 78, 216, 0.14);
+          color: #fff;
+        }
+
+        .flowStep.done {
+          border-color: rgba(74, 222, 128, 0.3);
+          background: rgba(34, 197, 94, 0.12);
+          color: rgba(220, 252, 231, 0.95);
+        }
+
         .sectionTab {
           border-radius: 999px;
           border: 1px solid rgba(255, 255, 255, 0.14);
@@ -702,6 +822,11 @@ export default function DashboardPage() {
           color: #ffffff;
         }
 
+        .sectionTab:disabled {
+          opacity: 0.45;
+          cursor: not-allowed;
+        }
+
         .panel {
           border-radius: 16px;
           border: 1px solid rgba(255, 255, 255, 0.1);
@@ -714,11 +839,22 @@ export default function DashboardPage() {
           grid-column: 1 / -1;
         }
 
+        .finalPlanPanel {
+          border-color: rgba(96, 165, 250, 0.2);
+          background: linear-gradient(180deg, rgba(29, 78, 216, 0.08), rgba(255, 255, 255, 0.02));
+        }
+
         .overviewText {
           margin: 0 0 12px;
           color: rgba(255, 255, 255, 0.88);
           line-height: 1.55;
           font-size: 15px;
+        }
+
+        .finalPlanGrid {
+          display: grid;
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+          gap: 10px;
         }
 
         .h2 {
@@ -897,6 +1033,21 @@ export default function DashboardPage() {
           box-shadow: 0 14px 30px rgba(0, 0, 0, 0.25);
         }
 
+        .selectable {
+          transition: border-color 0.18s ease, box-shadow 0.18s ease, transform 0.18s ease;
+        }
+
+        .selectable:hover {
+          border-color: rgba(96, 165, 250, 0.26);
+          transform: translateY(-1px);
+        }
+
+        .selectedCard {
+          border-color: rgba(96, 165, 250, 0.42);
+          box-shadow: 0 14px 30px rgba(29, 78, 216, 0.16);
+          background: rgba(29, 78, 216, 0.06);
+        }
+
         .cardTop {
           display: flex;
           align-items: flex-start;
@@ -953,7 +1104,30 @@ export default function DashboardPage() {
           text-decoration: underline;
         }
 
+        .linkButton {
+          border: 1px solid rgba(96, 165, 250, 0.28);
+          background: rgba(29, 78, 216, 0.1);
+          color: #dbeafe;
+          border-radius: 999px;
+          padding: 6px 10px;
+          font-weight: 800;
+          font-size: 12px;
+          cursor: pointer;
+        }
+
+        .linkButton.selected {
+          border-color: rgba(74, 222, 128, 0.3);
+          background: rgba(34, 197, 94, 0.12);
+          color: #dcfce7;
+        }
+
         @media (max-width: 980px) {
+          .finalPlanGrid {
+            grid-template-columns: 1fr;
+          }
+          .flowBar {
+            grid-template-columns: 1fr;
+          }
           .sectionNav {
             top: 111px;
             overflow-x: auto;
