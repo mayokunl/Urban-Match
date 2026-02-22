@@ -1,5 +1,6 @@
 "use client";
 import { useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
 import { auth, db } from "@/lib/firebase";
 import {
   createUserWithEmailAndPassword,
@@ -9,7 +10,7 @@ import {
   updateProfile,
   type User,
 } from "firebase/auth";
-import { doc, getDoc } from "firebase/firestore";
+import { doc, getDoc, setDoc } from "firebase/firestore";
 
 type UserProfile = {
   fullName: string;
@@ -40,6 +41,7 @@ function getErrorMessage(error: unknown, fallback: string) {
 }
 
 export default function Home() {
+  const router = useRouter();
   const [isAuthOpen, setIsAuthOpen] = useState(false);
   const [isProfileOpen, setIsProfileOpen] = useState(false);
   const [authMode, setAuthMode] = useState<"signup" | "login">("signup");
@@ -268,9 +270,17 @@ async function handleSaveProfile(e: React.FormEvent<HTMLFormElement>) {
     // ✅ This is all your backend team needs
     console.log("%cURBAN MATCH PROFILE ✅", "color:#22c55e;font-weight:900", payload);
 
+    localStorage.setItem("urbanMatchProfile", JSON.stringify(payload));
+
+    // Persist in Firestore too, but don't block redirect if the network/rules are slow.
+    void setDoc(doc(db, "profiles", currentUser.uid), payload, { merge: true }).catch((error) => {
+      console.error("Failed to save profile to Firestore:", error);
+    });
+
     // Optional: mark as saved + close modal
     setProfileSaved(true);
     setIsProfileOpen(false);
+    router.push("/dashboard");
   } finally {
     setProfileLoading(false);
   }
@@ -1248,6 +1258,8 @@ async function handleSaveProfile(e: React.FormEvent<HTMLFormElement>) {
 
         .authModal {
           width: min(460px, 100%);
+          max-height: calc(100vh - 40px);
+          overflow-y: auto;
           border-radius: 18px;
           background: #0e1118;
           border: 1px solid rgba(255, 255, 255, 0.14);
