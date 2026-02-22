@@ -35,7 +35,7 @@ public class HousingService {
             HousingDto.Root response = restClient.get()
                     .uri(url)
                     .header("x-rapidapi-host", "realty-base-us.p.rapidapi.com")
-                    .header("x-rapidapi-key", "6582b8b288mshd305169bca59ebfp180670jsnc093631e6657")
+                    .header("x-rapidapi-key", urlConfig.getApiKey2())
                     .retrieve()
                     .body(HousingDto.Root.class);
 
