@@ -13,7 +13,7 @@ import { doc, getDoc } from "firebase/firestore";
 
 type UserProfile = {
   fullName: string;
-  expectedSalary: string;
+  preferredJobs: string[];
   interests: string[];
   familySize: string;
   monthlyDebt: string;
@@ -23,7 +23,7 @@ type UserProfile = {
 
 const DEFAULT_PROFILE: UserProfile = {
   fullName: "",
-  expectedSalary: "",
+  preferredJobs: [],
   interests: [],
   familySize: "",
   monthlyDebt: "",
@@ -49,6 +49,7 @@ export default function Home() {
   const [profileLoading, setProfileLoading] = useState(false);
   const [profileError, setProfileError] = useState<string | null>(null);
   const [profileSaved, setProfileSaved] = useState(false);
+  const [jobInput, setJobInput] = useState("");
   const [interestInput, setInterestInput] = useState("");
 
   // Firebase auth form state
@@ -82,10 +83,16 @@ export default function Home() {
               .split(",")
               .map((item) => item.trim())
               .filter(Boolean);
+        const savedPreferredJobs = Array.isArray(data.preferredJobs)
+          ? data.preferredJobs
+          : String(data.preferredJobs ?? data.preferredJob ?? "")
+              .split(",")
+              .map((item) => item.trim())
+              .filter(Boolean);
 
         setUserProfile({
           fullName: String(data.fullName ?? user.displayName ?? ""),
-          expectedSalary: String(data.expectedSalary ?? data.salary ?? ""),
+          preferredJobs: savedPreferredJobs,
           interests: savedInterests,
           familySize: String(data.familySize ?? ""),
           monthlyDebt: String(data.monthlyDebt ?? ""),
@@ -126,6 +133,27 @@ export default function Home() {
   function resetProfileSavedState() {
     setProfileSaved(false);
     setProfileError(null);
+  }
+
+  function handleAddPreferredJob() {
+    const nextJob = jobInput.trim();
+    if (!nextJob) return;
+
+    setUserProfile((prev) => {
+      if (prev.preferredJobs.some((job) => job.toLowerCase() === nextJob.toLowerCase())) {
+        return prev;
+      }
+
+      return { ...prev, preferredJobs: [...prev.preferredJobs, nextJob] };
+    });
+    setJobInput("");
+  }
+
+  function removePreferredJob(jobToRemove: string) {
+    setUserProfile((prev) => ({
+      ...prev,
+      preferredJobs: prev.preferredJobs.filter((job) => job !== jobToRemove),
+    }));
   }
 
   function handleAddInterest() {
@@ -189,6 +217,10 @@ async function handleSaveProfile(e: React.FormEvent<HTMLFormElement>) {
     setProfileError("Please log in before saving your profile.");
     return;
   }
+  if (userProfile.preferredJobs.length === 0) {
+    setProfileError("Add at least one preferred job before saving your profile.");
+    return;
+  }
   if (userProfile.interests.length === 0) {
     setProfileError("Add at least one interest before saving your profile.");
     return;
@@ -199,16 +231,11 @@ async function handleSaveProfile(e: React.FormEvent<HTMLFormElement>) {
 
   try {
     // Convert to integers (whole numbers)
-    const expectedSalary = parseInt(userProfile.expectedSalary, 10);
     const familySize = parseInt(userProfile.familySize, 10);
     const monthlyDebt = parseInt(userProfile.monthlyDebt, 10);
     const housingBudget = parseInt(userProfile.housingBudget, 10);
 
     // Validate integer conversions
-    if (Number.isNaN(expectedSalary) || expectedSalary < 0) {
-      setProfileError("Expected salary must be a valid number.");
-      return;
-    }
     if (Number.isNaN(familySize) || familySize < 1) {
       setProfileError("Family size must be 1 or more.");
       return;
@@ -226,10 +253,10 @@ async function handleSaveProfile(e: React.FormEvent<HTMLFormElement>) {
       uid: currentUser.uid,
       email: currentUser.email ?? "",
       fullName: userProfile.fullName.trim(),
+      preferredJobs: userProfile.preferredJobs,
       interests: userProfile.interests,
 
       // integers ✅
-      expectedSalary,
       familySize,
       monthlyDebt,
       housingBudget,
@@ -433,7 +460,11 @@ async function handleSaveProfile(e: React.FormEvent<HTMLFormElement>) {
                 <div>
                   <div className="profileBannerTitle">Your Urban Match profile</div>
                   <p>
-                    Expected salary: {userProfile.expectedSalary || "Not set"} | Housing budget:{" "}
+                    Preferred jobs:{" "}
+                    {userProfile.preferredJobs.length > 0
+                      ? userProfile.preferredJobs.join(", ")
+                      : "Not set"}{" "}
+                    | Housing budget:{" "}
                     {userProfile.housingBudget || "Not set"} | Housing choice:{" "}
                     {userProfile.rentOrOwn === "own" ? "Own" : "Rent"} | Interests:{" "}
                     {userProfile.interests.length > 0 ? userProfile.interests.join(", ") : "Not set"}
@@ -636,20 +667,48 @@ async function handleSaveProfile(e: React.FormEvent<HTMLFormElement>) {
                 />
               </label>
 
-              <label className="field">
-                Expected salary (yearly)
-                <input
-                  type="number"
-                  min={0}
-                  placeholder="e.g. 65000"
-                  value={userProfile.expectedSalary}
-                  onChange={(e) =>
-                    setUserProfile((prev) => ({ ...prev, expectedSalary: e.target.value }))
-                  }
-                  required
-                  disabled={profileLoading}
-                />
-              </label>
+              <div className="field">
+                Preferred jobs
+                <div className="interestComposer">
+                  <input
+                    type="text"
+                    placeholder="e.g. Product Designer"
+                    value={jobInput}
+                    onChange={(e) => setJobInput(e.target.value)}
+                    disabled={profileLoading}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") {
+                        e.preventDefault();
+                        handleAddPreferredJob();
+                      }
+                    }}
+                  />
+                  <button
+                    className="btn btnGhost interestAddButton"
+                    type="button"
+                    onClick={handleAddPreferredJob}
+                    disabled={profileLoading}
+                  >
+                    Add
+                  </button>
+                </div>
+                {userProfile.preferredJobs.length > 0 && (
+                  <div className="interestList">
+                    {userProfile.preferredJobs.map((job) => (
+                      <button
+                        key={job}
+                        className="interestChip"
+                        type="button"
+                        onClick={() => removePreferredJob(job)}
+                        title="Remove preferred job"
+                        disabled={profileLoading}
+                      >
+                        {job} x
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
 
               <div className="field">
                 Interests (nightlife, food, dinner, etc.)
