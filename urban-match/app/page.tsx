@@ -501,14 +501,23 @@ async function handleSaveProfile(e: React.FormEvent<HTMLFormElement>) {
             <h2 className="h2">Features</h2>
             <div className="grid">
               <div className="card">
+                <div className="featureImageWrap">
+                  <img className="featureImage" src="/housing.jpg" alt="Housing recommendations preview" />
+                </div>
                 <h3>Explore housing</h3>
                 <p>Browse places with neighborhood context and quick filters.</p>
               </div>
               <div className="card">
+                <div className="featureImageWrap">
+                  <img className="featureImage" src="/hiddengems.jpg" alt="Hidden gems around St. Louis" />
+                </div>
                 <h3>Find hidden gems</h3>
                 <p>Curated spots and events to help you actually enjoy the city.</p>
               </div>
               <div className="card">
+                <div className="featureImageWrap">
+                  <img className="featureImage" src="/job.jpg" alt="Nearby job opportunities dashboard" />
+                </div>
                 <h3>Discover jobs</h3>
                 <p>Nearby roles and easy links so you can move fast.</p>
               </div>
@@ -1122,6 +1131,10 @@ async function handleSaveProfile(e: React.FormEvent<HTMLFormElement>) {
           letter-spacing: -0.3px;
         }
 
+        #features .h2 {
+          text-align: center;
+        }
+
         .profileBanner {
           border-radius: 14px;
           padding: 16px;
@@ -1165,6 +1178,28 @@ async function handleSaveProfile(e: React.FormEvent<HTMLFormElement>) {
           border-radius: 14px;
           background: rgba(255, 255, 255, 0.06);
           border: 1px solid rgba(255, 255, 255, 0.10);
+        }
+
+        .featureImageWrap {
+          margin: -2px -2px 10px;
+          border-radius: 12px;
+          overflow: hidden;
+          border: 1px solid rgba(255, 255, 255, 0.08);
+          background: rgba(255, 255, 255, 0.03);
+          aspect-ratio: 16 / 7;
+        }
+
+        .featureImage {
+          width: 100%;
+          height: 100%;
+          object-fit: cover;
+          display: block;
+          filter: saturate(0.95) contrast(1.02);
+          transition: transform 0.25s ease;
+        }
+
+        .card:hover .featureImage {
+          transform: scale(1.03);
         }
 
         .card h3 {
