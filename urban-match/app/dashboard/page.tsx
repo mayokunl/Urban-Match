@@ -32,9 +32,50 @@ type RecommendResponse = {
   userLocation?: { text: string; lat: number; lng: number };
 };
 
+type AppRecommendResponse = {
+  profile: UserProfile;
+  hiddenGems: RecommendResponse;
+  jobs: Array<{
+    id: string;
+    title: string;
+    company: string;
+    location: string;
+    salaryMin: number | null;
+    salaryMax: number | null;
+    applyUrl: string | null;
+    descriptionSnippet: string | null;
+    contractType: string | null;
+    contractTime: string | null;
+    matchScore: number;
+    matchReason: string;
+  }>;
+  housing: Array<{
+    id: string;
+    addressLine: string;
+    city: string;
+    state: string;
+    zip: string;
+    addressText: string;
+    priceMin?: number | null;
+    priceMax?: number | null;
+    listingUrl?: string | null;
+    matchScore: number;
+    matchReason: string;
+  }>;
+  meta: {
+    city: string;
+    generatedAt: string;
+    derivedPreferences: string[];
+    services?: {
+      hiddenGems?: string;
+      jobs?: string;
+      housing?: string;
+    };
+  };
+};
+
 type DashboardSection = "hidden_gems" | "jobs" | "housing";
 
-const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL || "http://127.0.0.1:5000";
 const DEFAULT_CITY = "St Louis, MO";
 
 function mapInterestsToPrefs(interests: string[]) {
@@ -93,13 +134,13 @@ function mapInterestsToPrefs(interests: string[]) {
   return Array.from(out);
 }
 
-async function fetchRecommendations(location: string, preferences: string[]) {
-  const params = new URLSearchParams({
-    location,
-    preferences: preferences.join(","),
+async function fetchAppRecommendations(profile: UserProfile) {
+  const res = await fetch("/api/recommend", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    cache: "no-store",
+    body: JSON.stringify({ profile }),
   });
-
-  const res = await fetch(`${API_BASE}/recommend?${params.toString()}`, { cache: "no-store" });
 
   if (!res.ok) {
     let msg = "Backend request failed";
@@ -110,7 +151,7 @@ async function fetchRecommendations(location: string, preferences: string[]) {
     throw new Error(msg);
   }
 
-  return (await res.json()) as RecommendResponse;
+  return (await res.json()) as AppRecommendResponse;
 }
 
 // optional: lets you keep profile between pages without firestore
@@ -152,7 +193,7 @@ export default function DashboardPage() {
   const [profile, setProfile] = useState<UserProfile | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [data, setData] = useState<RecommendResponse | null>(null);
+  const [data, setData] = useState<AppRecommendResponse | null>(null);
   const [activeSection, setActiveSection] = useState<DashboardSection>("hidden_gems");
 
   const prefs = useMemo(() => mapInterestsToPrefs(profile?.interests ?? []), [profile?.interests]);
@@ -185,7 +226,7 @@ export default function DashboardPage() {
 
       console.log("✅ DASHBOARD calling backend:", { location: DEFAULT_CITY, prefs });
 
-      const res = await fetchRecommendations(DEFAULT_CITY, prefs);
+      const res = await fetchAppRecommendations(profile);
       setData(res);
 
       console.log("✅ DASHBOARD backend results:", res);
@@ -255,7 +296,7 @@ export default function DashboardPage() {
         </button>
       </nav>
 
-      <section className="wrap">
+      <section className={activeSection === "hidden_gems" ? "wrap" : "wrap wrapSingle"}>
         {activeSection === "hidden_gems" && (
         <section className="panel">
           <h2 className="h2">Your plan inputs</h2>
@@ -316,7 +357,7 @@ export default function DashboardPage() {
 
           {activeSection === "hidden_gems" && data && (
             <div className="sections">
-              {Object.entries(data.results).map(([pref, places]) => (
+                  {Object.entries(data.hiddenGems.results).map(([pref, places]) => (
                 <section key={pref} className="prefSection">
                   <div className="prefHeader">
                     <h3>{formatPrefTitle(pref)}</h3>
@@ -362,7 +403,12 @@ export default function DashboardPage() {
 
           {activeSection === "jobs" && (
             <>
-              <div className="empty">This section is ready for your jobs API integration.</div>
+              {(!data || data.jobs.length === 0) && (
+                <div className="empty">
+                  No jobs yet. Run Generate plan in Hidden Gems first, and make sure the `masconsulting` backend is
+                  running.
+                </div>
+              )}
               <div className="stackCard">
                 <div className="stackTitle">Preferred jobs from profile</div>
                 <div className="chips">
@@ -376,12 +422,52 @@ export default function DashboardPage() {
                   )}
                 </div>
               </div>
+              {data && data.jobs.length > 0 && (
+                <div className="cards" style={{ marginTop: 12 }}>
+                  {data.jobs.map((job, idx) => (
+                    <article key={job.id ?? `${job.title ?? "job"}-${idx}`} className="card">
+                      <div className="cardTop">
+                        <div className="name">{job.title || "Untitled role"}</div>
+                        <div className="rating">
+                          {job.salaryMin || job.salaryMax
+                            ? `$${Math.round(job.salaryMin ?? 0).toLocaleString()}-$${Math.round(
+                                job.salaryMax ?? 0,
+                              ).toLocaleString()}`
+                            : "Salary n/a"}
+                        </div>
+                      </div>
+                      <div className="addr">
+                        {job.company || "Unknown company"}
+                        {job.location ? ` | ${job.location}` : ""}
+                      </div>
+                      <div className="summary">{job.matchReason} (score: {job.matchScore})</div>
+                      {job.descriptionSnippet && (
+                        <div className="summary">{job.descriptionSnippet}</div>
+                      )}
+                      <div className="links">
+                        {job.applyUrl && (
+                          <a className="link" href={job.applyUrl} target="_blank" rel="noreferrer">
+                            Apply
+                          </a>
+                        )}
+                        {job.contractType && <span className="muted">{job.contractType}</span>}
+                        {job.contractTime && <span className="muted">{job.contractTime}</span>}
+                      </div>
+                    </article>
+                  ))}
+                </div>
+              )}
             </>
           )}
 
           {activeSection === "housing" && (
             <>
-              <div className="empty">This section is ready for your housing API integration.</div>
+              {(!data || data.housing.length === 0) && (
+                <div className="empty">
+                  No housing results yet. Run Generate plan in Hidden Gems first, and make sure the `masconsulting`
+                  backend is running.
+                </div>
+              )}
               <div className="stackCard">
                 <div className="stackTitle">Housing preferences from profile</div>
                 <div className="stackMeta">
@@ -389,6 +475,35 @@ export default function DashboardPage() {
                   | Family size: {profile?.familySize ?? 1}
                 </div>
               </div>
+              {data && data.housing.length > 0 && (
+                <div className="cards" style={{ marginTop: 12 }}>
+                  {data.housing.map((home, idx) => {
+                    return (
+                      <article key={home.id ?? `home-${idx}`} className="card">
+                        <div className="cardTop">
+                          <div className="name">Rental Listing</div>
+                          <div className="rating">
+                            {home.priceMin || home.priceMax
+                              ? `$${Math.round(home.priceMin ?? 0).toLocaleString()}-$${Math.round(
+                                  home.priceMax ?? 0,
+                                ).toLocaleString()}`
+                              : "Price n/a"}
+                          </div>
+                        </div>
+                        <div className="addr">{home.addressText || "Address unavailable"}</div>
+                        <div className="summary">{home.matchReason} (score: {home.matchScore})</div>
+                        <div className="links">
+                          {home.listingUrl && (
+                            <a className="link" href={home.listingUrl} target="_blank" rel="noreferrer">
+                              View listing
+                            </a>
+                          )}
+                        </div>
+                      </article>
+                    );
+                  })}
+                </div>
+              )}
             </>
           )}
         </section>
@@ -528,6 +643,10 @@ export default function DashboardPage() {
           display: grid;
           grid-template-columns: 1fr 1.3fr;
           gap: 14px;
+        }
+
+        .wrapSingle {
+          grid-template-columns: 1fr;
         }
 
         .sectionNav {
