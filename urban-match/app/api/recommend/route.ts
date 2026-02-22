@@ -82,6 +82,7 @@ type HousingProperty = {
 
 type RankedHousing = {
   id: string;
+  title: string;
   addressLine: string;
   city: string;
   state: string;
@@ -94,12 +95,28 @@ type RankedHousing = {
   matchReason: string;
 };
 
+type LifeOverview = {
+  text: string;
+  highlights: string[];
+  recommendedHousingId: string | null;
+  recommendedHousingTitle: string | null;
+  avgDistanceToTopGemsMiles: number | null;
+  gemsWithin3Miles: number | null;
+  topJobTitles: string[];
+};
+
 const DEFAULT_CITY = "St Louis, MO";
 const GENS_BASE =
   process.env.GENS_API_BASE_URL ??
   process.env.NEXT_PUBLIC_API_BASE_URL ??
   "http://127.0.0.1:5000";
 const MAS_BASE = process.env.MAS_API_BASE_URL ?? "http://127.0.0.1:8080";
+const DEFAULT_HOUSING_QUERY = process.env.HOUSING_SEARCH_QUERY ?? "63103";
+const GOOGLE_MAPS_API_KEY =
+  process.env.GOOGLE_MAPS_API_KEY ??
+  process.env.GENS_GOOGLE_MAPS_API_KEY ??
+  process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY ??
+  null;
 
 function mapInterestsToPrefs(interests: string[]) {
   const out = new Set<string>();
@@ -289,8 +306,18 @@ function rankHousing(rawHomes: HousingProperty[], profile: Required<UserProfile>
       matchScore += 5;
     }
 
+    let title = line || "Rental Listing";
+    if (!line && home.href) {
+      try {
+        const slug = new URL(home.href).pathname.split("/").pop() ?? "";
+        const base = slug.split("_")[0]?.replace(/-/g, " ").trim();
+        if (base) title = base;
+      } catch {}
+    }
+
     return {
       id: String(home.propertyId ?? `home-${idx}`),
+      title,
       addressLine: line,
       city,
       state,
@@ -314,6 +341,152 @@ function rankHousing(rawHomes: HousingProperty[], profile: Required<UserProfile>
   return ranked.slice(0, 12);
 }
 
+function basicHousingFallback(rawHomes: HousingProperty[]) {
+  return rawHomes.slice(0, 12).map((home, idx) => {
+    const address = home.location?.address;
+    const line = String(address?.line ?? "");
+    const city = String(address?.city ?? "");
+    const state = String(address?.state ?? "");
+    const zip = String(address?.zip ?? "");
+    const addressText = [line, city, state, zip].filter(Boolean).join(", ") || "Address unavailable";
+    const rawPriceMin = home.priceMin ?? home.list_price_min;
+    const rawPriceMax = home.priceMax ?? home.list_price_max;
+    const priceMin = typeof rawPriceMin === "number" ? rawPriceMin : null;
+    const priceMax = typeof rawPriceMax === "number" ? rawPriceMax : null;
+    const title = line || "Rental Listing";
+
+    return {
+      id: String(home.propertyId ?? `home-${idx}`),
+      title,
+      addressLine: line,
+      city,
+      state,
+      zip,
+      addressText,
+      priceMin,
+      priceMax,
+      listingUrl: home.href ?? null,
+      matchScore: 0,
+      matchReason: priceMin !== null || priceMax !== null ? "Price available" : "Price range unavailable",
+    } satisfies RankedHousing;
+  });
+}
+
+function haversineMiles(lat1: number, lng1: number, lat2: number, lng2: number) {
+  const toRad = (n: number) => (n * Math.PI) / 180;
+  const R = 3958.8;
+  const dLat = toRad(lat2 - lat1);
+  const dLng = toRad(lng2 - lng1);
+  const a =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLng / 2) ** 2;
+  return 2 * R * Math.asin(Math.sqrt(a));
+}
+
+function flattenTopGems(hiddenGems: HiddenGemsResponse, max = 8) {
+  return Object.values(hiddenGems.results)
+    .flat()
+    .filter((p) => typeof p.lat === "number" && typeof p.lng === "number")
+    .slice(0, max);
+}
+
+async function geocodeAddress(address: string) {
+  if (!GOOGLE_MAPS_API_KEY || !address) return null;
+  const url = new URL("https://maps.googleapis.com/maps/api/geocode/json");
+  url.searchParams.set("address", address);
+  url.searchParams.set("key", GOOGLE_MAPS_API_KEY);
+
+  try {
+    const res = await fetch(url.toString(), { cache: "no-store" });
+    if (!res.ok) return null;
+    const data = (await res.json()) as {
+      results?: Array<{ geometry?: { location?: { lat?: number; lng?: number } } }>;
+    };
+    const loc = data.results?.[0]?.geometry?.location;
+    if (typeof loc?.lat === "number" && typeof loc?.lng === "number") {
+      return { lat: loc.lat, lng: loc.lng };
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+async function buildLifeOverview(args: {
+  profile: Required<UserProfile>;
+  hiddenGems: HiddenGemsResponse;
+  jobs: RankedJob[];
+  housing: RankedHousing[];
+}) {
+  const { profile, hiddenGems, jobs, housing } = args;
+  const topHousing = housing[0] ?? null;
+  const topJobTitles = jobs.slice(0, 3).map((j) => j.title);
+  const highlights: string[] = [];
+
+  let avgDistanceToTopGemsMiles: number | null = null;
+  let gemsWithin3Miles: number | null = null;
+
+  if (topHousing) {
+    if (topHousing.priceMax !== null && profile.housingBudget > 0 && topHousing.priceMax <= profile.housingBudget) {
+      highlights.push("Top housing option is within budget");
+    } else if (topHousing.priceMin !== null && profile.housingBudget > 0 && topHousing.priceMin <= profile.housingBudget) {
+      highlights.push("Top housing option starts near your budget");
+    }
+  }
+
+  const gems = flattenTopGems(hiddenGems, 8);
+  if (topHousing && gems.length > 0) {
+    const geo = await geocodeAddress(topHousing.addressText);
+    if (geo) {
+      const distances = gems.map((g) => haversineMiles(geo.lat, geo.lng, g.lat!, g.lng!));
+      avgDistanceToTopGemsMiles = Number((distances.reduce((a, b) => a + b, 0) / distances.length).toFixed(1));
+      gemsWithin3Miles = distances.filter((d) => d <= 3).length;
+      highlights.push(
+        gemsWithin3Miles > 0
+          ? `${gemsWithin3Miles} of your top hidden gems are within ~3 miles`
+          : `Average distance to top hidden gems is ~${avgDistanceToTopGemsMiles} miles`,
+      );
+    }
+  }
+
+  if (topJobTitles.length > 0) {
+    highlights.push(`Top job matches include ${topJobTitles.slice(0, 2).join(" and ")}`);
+  }
+
+  const textParts: string[] = [];
+  if (topHousing) {
+    textParts.push(
+      `To maximize your life in St. Louis, start by looking at ${topHousing.title} (${topHousing.addressText}) because it is currently your strongest housing match: ${topHousing.matchReason.toLowerCase()}.`,
+    );
+  } else {
+    textParts.push("To maximize your life in St. Louis, start by generating more housing matches so we can compare budget fit and location.");
+  }
+
+    if (avgDistanceToTopGemsMiles !== null) {
+      textParts.push(
+        gemsWithin3Miles && gemsWithin3Miles > 0
+          ? `It is close to your lifestyle picks, with ${gemsWithin3Miles} top hidden gems within about 3 miles (average distance ~${avgDistanceToTopGemsMiles} miles).`
+          : `It is about ${avgDistanceToTopGemsMiles} miles on average from your top hidden gems.`,
+      );
+    }
+
+  if (topJobTitles.length > 0) {
+    textParts.push(`Your strongest job matches right now are ${topJobTitles.slice(0, 3).join(", ")}.`);
+  } else {
+    textParts.push("No strong job matches were returned yet, so broadening your preferred job keywords may help.");
+  }
+
+  return {
+    text: textParts.join(" "),
+    highlights,
+    recommendedHousingId: topHousing?.id ?? null,
+    recommendedHousingTitle: topHousing?.title ?? null,
+    avgDistanceToTopGemsMiles,
+    gemsWithin3Miles,
+    topJobTitles,
+  } satisfies LifeOverview;
+}
+
 export async function POST(req: NextRequest) {
   try {
     const body = (await req.json()) as { profile?: UserProfile };
@@ -331,7 +504,7 @@ export async function POST(req: NextRequest) {
 
     const preferredRole = profile.preferredJobs.find((j) => j.trim()) || "Software Engineer";
     const jobsUrl = `${MAS_BASE}/api/jobs/search?${new URLSearchParams({ role: preferredRole }).toString()}`;
-    const housingUrl = `${MAS_BASE}/api/housing/search-by-city?${new URLSearchParams({ city: "St Louis" }).toString()}`;
+    const housingUrl = `${MAS_BASE}/api/housing/search-by-city?${new URLSearchParams({ city: DEFAULT_HOUSING_QUERY }).toString()}`;
 
     const [hiddenGemsResult, jobsResult, housingResult] = await Promise.allSettled([
       fetch(`${GENS_BASE}/recommend?${params.toString()}`, { method: "GET", cache: "no-store" }),
@@ -366,15 +539,22 @@ export async function POST(req: NextRequest) {
     if (housingResult.status === "fulfilled" && housingResult.value.ok) {
       try {
         const rawHousing = (await housingResult.value.json()) as HousingProperty[];
-        housing = rankHousing(rawHousing, profile);
+        try {
+          housing = rankHousing(rawHousing, profile);
+        } catch {
+          housing = basicHousingFallback(rawHousing);
+        }
       } catch {}
     }
+
+    const lifeOverview = await buildLifeOverview({ profile, hiddenGems, jobs, housing });
 
     return NextResponse.json({
       profile,
       hiddenGems,
       jobs,
       housing,
+      lifeOverview,
       meta: {
         city: DEFAULT_CITY,
         generatedAt: new Date().toISOString(),

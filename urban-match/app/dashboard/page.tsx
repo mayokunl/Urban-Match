@@ -51,6 +51,7 @@ type AppRecommendResponse = {
   }>;
   housing: Array<{
     id: string;
+    title: string;
     addressLine: string;
     city: string;
     state: string;
@@ -62,6 +63,15 @@ type AppRecommendResponse = {
     matchScore: number;
     matchReason: string;
   }>;
+  lifeOverview?: {
+    text: string;
+    highlights: string[];
+    recommendedHousingId: string | null;
+    recommendedHousingTitle: string | null;
+    avgDistanceToTopGemsMiles: number | null;
+    gemsWithin3Miles: number | null;
+    topJobTitles: string[];
+  };
   meta: {
     city: string;
     generatedAt: string;
@@ -297,6 +307,22 @@ export default function DashboardPage() {
       </nav>
 
       <section className={activeSection === "hidden_gems" ? "wrap" : "wrap wrapSingle"}>
+        {data?.lifeOverview && (
+          <section className="panel overviewPanel">
+            <h2 className="h2">AI Life Overview</h2>
+            <p className="overviewText">{data.lifeOverview.text}</p>
+            {data.lifeOverview.highlights.length > 0 && (
+              <div className="chips">
+                {data.lifeOverview.highlights.map((item, idx) => (
+                  <span key={`${item}-${idx}`} className="chip">
+                    {item}
+                  </span>
+                ))}
+              </div>
+            )}
+          </section>
+        )}
+
         {activeSection === "hidden_gems" && (
         <section className="panel">
           <h2 className="h2">Your plan inputs</h2>
@@ -481,7 +507,7 @@ export default function DashboardPage() {
                     return (
                       <article key={home.id ?? `home-${idx}`} className="card">
                         <div className="cardTop">
-                          <div className="name">Rental Listing</div>
+                          <div className="name">{home.title || "Rental Listing"}</div>
                           <div className="rating">
                             {home.priceMin || home.priceMax
                               ? `$${Math.round(home.priceMin ?? 0).toLocaleString()}-$${Math.round(
@@ -682,6 +708,17 @@ export default function DashboardPage() {
           background: rgba(255, 255, 255, 0.03);
           box-shadow: 0 16px 40px rgba(0, 0, 0, 0.35);
           padding: 14px;
+        }
+
+        .overviewPanel {
+          grid-column: 1 / -1;
+        }
+
+        .overviewText {
+          margin: 0 0 12px;
+          color: rgba(255, 255, 255, 0.88);
+          line-height: 1.55;
+          font-size: 15px;
         }
 
         .h2 {
