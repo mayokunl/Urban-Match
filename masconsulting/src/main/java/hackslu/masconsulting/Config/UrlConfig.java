@@ -18,6 +18,11 @@ public class UrlConfig {
     @Value("${adzuna.url}")
     private String adzunaurl;
 
+    @Value("${rapid.api_key}")
+    private String apiKey2;
+
+
+
     @PostConstruct
     public void test(){
         System.out.print(adzunaurl);
