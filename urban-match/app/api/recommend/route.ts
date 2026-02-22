@@ -111,6 +111,8 @@ const GENS_BASE =
   process.env.NEXT_PUBLIC_API_BASE_URL ??
   "http://127.0.0.1:5000";
 const MAS_BASE = process.env.MAS_API_BASE_URL ?? "http://127.0.0.1:8080";
+const JOBS_API_BASE_URL = process.env.JOBS_API_BASE_URL ?? MAS_BASE;
+const HOUSING_API_BASE_URL = process.env.HOUSING_API_BASE_URL ?? MAS_BASE;
 const DEFAULT_HOUSING_QUERY = process.env.HOUSING_SEARCH_QUERY ?? "63103";
 const GOOGLE_MAPS_API_KEY =
   process.env.GOOGLE_MAPS_API_KEY ??
@@ -503,8 +505,8 @@ export async function POST(req: NextRequest) {
     });
 
     const preferredRole = profile.preferredJobs.find((j) => j.trim()) || "Software Engineer";
-    const jobsUrl = `${MAS_BASE}/api/jobs/search?${new URLSearchParams({ role: preferredRole }).toString()}`;
-    const housingUrl = `${MAS_BASE}/api/housing/search-by-city?${new URLSearchParams({ city: DEFAULT_HOUSING_QUERY }).toString()}`;
+    const jobsUrl = `${JOBS_API_BASE_URL}/api/jobs/search?${new URLSearchParams({ role: preferredRole }).toString()}`;
+    const housingUrl = `${HOUSING_API_BASE_URL}/api/housing/search-by-city?${new URLSearchParams({ city: DEFAULT_HOUSING_QUERY }).toString()}`;
 
     const [hiddenGemsResult, jobsResult, housingResult] = await Promise.allSettled([
       fetch(`${GENS_BASE}/recommend?${params.toString()}`, { method: "GET", cache: "no-store" }),
