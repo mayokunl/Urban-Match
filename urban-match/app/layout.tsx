@@ -14,12 +14,8 @@ const geistMono = Geist_Mono({
 
 export const metadata: Metadata = {
   title: "Urban Match",
-  description: "Plan your best life in St.Louis",
-  icons: {
-    icon: "/urban_matchlogo.png",
-    shortcut: "/urban_matchlogo.png",
-    apple: "/urban_matchlogo.png",
-  },
+  description: "Urban Match",
+  
 };
 
 
